@@ -247,7 +247,29 @@ footer a:hover{color:#fff}
 .admin-topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:22px;flex-wrap:wrap}
 .admin-topbar h1{font-size:21px;font-weight:800}
 
-/* ===== Admin bottom icon nav (mobile only) ===== */
+/* ===== Admin hamburger + slide-in drawer menu (mobile) ===== */
+.admin-menu-btn{display:none;width:38px;height:38px;align-items:center;justify-content:center;font-size:20px;color:#fff;border-radius:8px;flex:0 0 auto}
+.admin-menu-btn:hover{background:#1D1D1D}
+.admin-drawer-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:290;opacity:0;transition:opacity .2s ease}
+.admin-drawer-overlay.open{display:block;opacity:1}
+.admin-drawer{position:fixed;top:0;right:-86vw;bottom:0;width:86vw;max-width:300px;background:var(--black2);color:#fff;z-index:300;
+  display:flex;flex-direction:column;padding:18px 14px calc(18px + env(safe-area-inset-bottom));overflow-y:auto;
+  transition:right .25s ease;box-shadow:-8px 0 24px rgba(0,0,0,.25)}
+.admin-drawer.open{right:0}
+.admin-drawer-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.admin-drawer-head .logo{color:#fff;margin-bottom:0;font-size:15.5px}
+.admin-drawer-close{width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-size:18px;color:#B5B5B5;border-radius:8px;flex:0 0 auto}
+.admin-drawer-close:hover{background:#1D1D1D;color:#fff}
+.admin-drawer nav{display:flex;flex-direction:column;gap:3px;margin-bottom:14px}
+.admin-drawer nav a{display:flex;align-items:center;gap:12px;padding:13px 12px;border-radius:9px;color:#B5B5B5;font-weight:600;font-size:15px}
+.admin-drawer nav a.active,.admin-drawer nav a:hover{background:#1D1D1D;color:#fff}
+.admin-drawer hr{border:none;border-top:1px solid #262626;margin:10px 0}
+.admin-drawer .drawer-foot{display:flex;flex-direction:column;gap:3px}
+.admin-drawer .drawer-foot a{display:flex;align-items:center;gap:12px;padding:13px 12px;border-radius:9px;color:#B5B5B5;font-weight:600;font-size:15px}
+.admin-drawer .drawer-foot a:hover{background:#1D1D1D;color:#fff}
+.admin-drawer .drawer-foot a.logout-link{color:var(--red)}
+
+/* legacy bottom icon nav — no longer used, kept hidden for safety */
 .admin-bottom-nav{display:none}
 .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}
 .stat-card{background:#fff;border-radius:12px;padding:18px;border:1px solid var(--gray2)}
@@ -292,26 +314,12 @@ tr:last-child td{border-bottom:none}
   }
   .admin-side .logo{margin-bottom:0;font-size:15.5px}
   .admin-side .logo span{display:none} /* hide the "| Wassel" part to save space */
-  .admin-side-actions{margin:0;gap:14px}
-  .admin-side-actions a .txt{display:none}
-  .admin-side-actions a{font-size:19px}
-  .admin-side nav{display:none} /* replaced by the fixed bottom nav below */
-  .admin-main{padding:16px 12px 90px}
+  .admin-side-actions{display:none} /* moved into the drawer menu on mobile */
+  .admin-side nav{display:none} /* replaced by the hamburger + drawer below */
+  .admin-menu-btn{display:flex} /* show hamburger button on mobile */
+  .admin-main{padding:16px 12px 26px}
   .admin-topbar h1{font-size:18px}
   .admin-topbar .btn{flex:1 1 auto;text-align:center}
-
-  /* ---- Fixed bottom icon navigation for the admin panel ---- */
-  .admin-bottom-nav{
-    display:flex;position:fixed;bottom:0;right:0;left:0;z-index:80;background:#fff;
-    border-top:1px solid var(--gray2);box-shadow:0 -4px 16px rgba(0,0,0,.06);
-    padding:6px 2px calc(6px + env(safe-area-inset-bottom));
-  }
-  .admin-bottom-nav a{
-    flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
-    color:var(--muted);font-size:10px;font-weight:700;padding:6px 2px;text-align:center;
-  }
-  .admin-bottom-nav a .ic{font-size:18px}
-  .admin-bottom-nav a.active{color:var(--red-dark)}
 
   .nav-links,.mobile-hide{display:none}
   .mobile-only{display:flex}
@@ -417,7 +425,7 @@ async function loadAll() {
     DB.categories = []; DB.products = []; DB.zones = [];
   }
   try { cart = JSON.parse(localStorage.getItem('wassel_cart') || '[]'); } catch (e) { cart = []; }
-  adminAuthed = !!localStorage.getItem('wassel_token');
+  adminAuthed = !!localStorage.getItem('wassel_admin_session');
 }
 function saveCart() { localStorage.setItem('wassel_cart', JSON.stringify(cart)); }
 
@@ -969,35 +977,61 @@ let adminAuthed = false;
 let adminTab = 'dashboard';
 let editingProduct = null, editingZone = null;
 let adminDataLoaded = { orders: false, customers: false };
+let adminMenuOpen = false;
+
+/* ---------- بيانات دخول لوحة التحكم (محلية، قابلة للتعديل من داخل اللوحة) ---------- */
+const ADMIN_CREDS_KEY = 'wassel_admin_creds';
+const ADMIN_SESSION_KEY = 'wassel_admin_session';
+function getAdminCreds() {
+  let creds = null;
+  try { creds = JSON.parse(localStorage.getItem(ADMIN_CREDS_KEY)); } catch (e) {}
+  if (!creds || !creds.username || !creds.password) {
+    creds = { username: 'sad123456', password: 'asasas77' };
+    localStorage.setItem(ADMIN_CREDS_KEY, JSON.stringify(creds));
+  }
+  return creds;
+}
+function setAdminCreds(username, password) {
+  localStorage.setItem(ADMIN_CREDS_KEY, JSON.stringify({ username, password }));
+}
+
+const ADMIN_NAV_ITEMS = [
+  { tab: 'dashboard', icon: '📊', label: 'لوحة القيادة' },
+  { tab: 'products',  icon: '📦', label: 'المنتجات' },
+  { tab: 'orders',    icon: '🧾', label: 'الطلبات' },
+  { tab: 'zones',     icon: '🚚', label: 'مناطق التوصيل' },
+  { tab: 'customers', icon: '👥', label: 'العملاء' },
+  { tab: 'settings',  icon: '⚙️', label: 'إعدادات الدخول' },
+];
 
 function pageAdmin(sub) {
   if (!adminAuthed) {
+    getAdminCreds(); // تأكد من وجود بيانات دخول افتراضية
     return `
     ${offlineBanner()}
     <div class="login-box">
       <div class="logo" style="margin-bottom:18px"><img src="sad123.jpg" class="logo-img" alt="شعار واصل">واصل <span style="color:var(--red)">| Wassel</span> — لوحة التحكم</div>
-      <div class="field" style="margin-bottom:12px"><label>البريد الإلكتروني</label><input id="adminEmail" type="email" placeholder="admin@wassel.ps"></div>
-      <div class="field" style="margin-bottom:12px"><label>كلمة المرور</label><input id="adminPass" type="password" placeholder="أدخل كلمة المرور"></div>
+      <div class="field" style="margin-bottom:12px"><label>اسم المستخدم</label><input id="adminUser" type="text" placeholder="اسم المستخدم" autocomplete="username"></div>
+      <div class="field" style="margin-bottom:12px"><label>كلمة المرور</label><input id="adminPass" type="password" placeholder="أدخل كلمة المرور" autocomplete="current-password"></div>
       <button class="btn btn-black btn-block" onclick="doAdminLogin()">دخول</button>
-
     </div>`;
   }
   adminTab = sub || 'dashboard';
+
+  const navLinksHtml = ADMIN_NAV_ITEMS.map(item =>
+    `<a href="#/admin/${item.tab}" class="${adminTab === item.tab ? 'active' : ''}">${item.icon} ${item.label}</a>`
+  ).join('');
+
   return `
   <div class="admin-shell">
     <aside class="admin-side">
+      <button class="admin-menu-btn" onclick="openAdminMenu();return false;" aria-label="فتح القائمة">☰</button>
       <a href="#/" class="logo"><img src="sad123.jpg" class="logo-img" alt="شعار واصل">واصل <span style="color:var(--red)">| Wassel</span></a>
       <div class="admin-side-actions">
         <a href="#" onclick="adminLogout();return false;" title="تسجيل الخروج"><span class="ic">🚪</span><span class="txt" style="color:var(--red)">تسجيل الخروج</span></a>
         <a href="#/" title="العودة للمتجر"><span class="ic">🔙</span><span class="txt">العودة للمتجر</span></a>
       </div>
-      <nav>
-        <a href="#/admin/dashboard" class="${adminTab === 'dashboard' ? 'active' : ''}">📊 لوحة القيادة</a>
-        <a href="#/admin/products" class="${adminTab === 'products' ? 'active' : ''}">📦 المنتجات</a>
-        <a href="#/admin/orders" class="${adminTab === 'orders' ? 'active' : ''}">🧾 الطلبات</a>
-        <a href="#/admin/zones" class="${adminTab === 'zones' ? 'active' : ''}">🚚 مناطق التوصيل</a>
-        <a href="#/admin/customers" class="${adminTab === 'customers' ? 'active' : ''}">👥 العملاء</a>
-      </nav>
+      <nav>${navLinksHtml}</nav>
     </aside>
     <main class="admin-main">
       ${offlineBanner()}
@@ -1006,33 +1040,73 @@ function pageAdmin(sub) {
       ${adminTab === 'orders' ? adminOrders() : ''}
       ${adminTab === 'zones' ? adminZones() : ''}
       ${adminTab === 'customers' ? adminCustomers() : ''}
+      ${adminTab === 'settings' ? adminSettings() : ''}
     </main>
   </div>
-  <nav class="admin-bottom-nav">
-    <a href="#/admin/dashboard" class="${adminTab === 'dashboard' ? 'active' : ''}"><span class="ic">📊</span>القيادة</a>
-    <a href="#/admin/products" class="${adminTab === 'products' ? 'active' : ''}"><span class="ic">📦</span>المنتجات</a>
-    <a href="#/admin/orders" class="${adminTab === 'orders' ? 'active' : ''}"><span class="ic">🧾</span>الطلبات</a>
-    <a href="#/admin/zones" class="${adminTab === 'zones' ? 'active' : ''}"><span class="ic">🚚</span>المناطق</a>
-    <a href="#/admin/customers" class="${adminTab === 'customers' ? 'active' : ''}"><span class="ic">👥</span>العملاء</a>
+
+  <div class="admin-drawer-overlay ${adminMenuOpen ? 'open' : ''}" onclick="closeAdminMenu()"></div>
+  <nav class="admin-drawer ${adminMenuOpen ? 'open' : ''}">
+    <div class="admin-drawer-head">
+      <a href="#/" class="logo" onclick="closeAdminMenu()"><img src="sad123.jpg" class="logo-img" alt="شعار واصل">واصل <span style="color:var(--red)">| Wassel</span></a>
+      <button class="admin-drawer-close" onclick="closeAdminMenu()" aria-label="إغلاق القائمة">✕</button>
+    </div>
+    <nav onclick="closeAdminMenu()">${navLinksHtml}</nav>
+    <hr>
+    <div class="drawer-foot">
+      <a href="#" onclick="closeAdminMenu();adminLogout();return false;" class="logout-link">🚪 تسجيل الخروج</a>
+      <a href="#/" onclick="closeAdminMenu()">🔙 العودة للمتجر</a>
+    </div>
   </nav>`;
 }
+function openAdminMenu() { adminMenuOpen = true; render(); }
+function closeAdminMenu() { adminMenuOpen = false; render(); }
+
 async function doAdminLogin() {
-  const email = document.getElementById('adminEmail').value.trim();
+  const username = document.getElementById('adminUser').value.trim();
   const password = document.getElementById('adminPass').value;
-  try {
-    const data = await apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
-    localStorage.setItem('wassel_token', data.token);
+  const creds = getAdminCreds();
+  if (username === creds.username && password === creds.password) {
+    localStorage.setItem(ADMIN_SESSION_KEY, '1');
     adminAuthed = true;
     adminDataLoaded = { orders: false, customers: false };
     go('#/admin/dashboard'); render();
-  } catch (e) {
-    toast(e.message, true);
+  } else {
+    toast('اسم المستخدم أو كلمة المرور غير صحيحة', true);
   }
 }
 function adminLogout() {
   adminAuthed = false;
-  localStorage.removeItem('wassel_token');
+  adminMenuOpen = false;
+  localStorage.removeItem(ADMIN_SESSION_KEY);
   go('#/'); render();
+}
+
+/* ---------- صفحة إعدادات الدخول: تعديل اسم المستخدم/كلمة المرور ---------- */
+function adminSettings() {
+  const creds = getAdminCreds();
+  return `
+  <div class="admin-topbar"><h1>إعدادات الدخول</h1></div>
+  <div class="card" style="max-width:420px;background:#fff;border:1px solid var(--gray2);border-radius:14px;padding:20px">
+    <p style="color:var(--muted);font-size:13px;margin-bottom:16px">عدّل اسم المستخدم وكلمة المرور الخاصة بدخولك للوحة التحكم حتى لا تنساها.</p>
+    <div class="field" style="margin-bottom:12px"><label>كلمة المرور الحالية</label><input id="stCurrentPass" type="password" placeholder="أدخل كلمة المرور الحالية"></div>
+    <hr style="border:none;border-top:1px solid var(--gray2);margin:16px 0">
+    <div class="field" style="margin-bottom:12px"><label>اسم المستخدم الجديد</label><input id="stNewUser" type="text" value="${creds.username}"></div>
+    <div class="field" style="margin-bottom:16px"><label>كلمة المرور الجديدة</label><input id="stNewPass" type="password" placeholder="اتركها فارغة لعدم التغيير"></div>
+    <button class="btn btn-black btn-block" onclick="saveAdminSettings()">حفظ التعديلات</button>
+  </div>`;
+}
+function saveAdminSettings() {
+  const creds = getAdminCreds();
+  const currentPass = document.getElementById('stCurrentPass').value;
+  const newUser = document.getElementById('stNewUser').value.trim();
+  const newPassRaw = document.getElementById('stNewPass').value;
+  if (currentPass !== creds.password) { toast('كلمة المرور الحالية غير صحيحة', true); return; }
+  if (!newUser) { toast('يرجى إدخال اسم مستخدم', true); return; }
+  const newPass = newPassRaw ? newPassRaw : creds.password;
+  setAdminCreds(newUser, newPass);
+  toast('تم تحديث بيانات الدخول بنجاح');
+  document.getElementById('stCurrentPass').value = '';
+  document.getElementById('stNewPass').value = '';
 }
 
 async function ensureOrdersLoaded() {
