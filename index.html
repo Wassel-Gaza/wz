@@ -464,6 +464,7 @@ function watchCollection(name, targetKey, onUpdate) {
     if (fbReady) render();
   }, err => {
     toast('تعذّر الاتصال بقاعدة البيانات: ' + err.message, true);
+    if (onUpdate) onUpdate(); /* لا نترك التحميل معلّقًا للأبد بسبب خطأ اتصال أو صلاحيات */
   });
   unsubscribers.push(unsub);
 }
@@ -482,21 +483,28 @@ function deriveCustomers() {
 async function loadAll() {
   try { cart = JSON.parse(localStorage.getItem('wassel_cart') || '[]'); } catch (e) { cart = []; }
 
-  await new Promise(resolve => {
+  /* مهلة أمان: إذا تعطّل الاتصال بالكامل (بدون رد وبدون خطأ)، يفتح الموقع تلقائيًا
+     بعد 6 ثوانٍ بدل أن يبقى عالقًا على شاشة التحميل للأبد */
+  const withSafety = (p) => Promise.race([
+    p,
+    new Promise(resolve => setTimeout(resolve, 6000))
+  ]);
+
+  await withSafety(new Promise(resolve => {
     let loaded = 0;
     const done = () => { loaded++; if (loaded === 4) resolve(); };
     watchCollection('categories', 'categories', done);
     watchCollection('zones', 'zones', done);
     watchCollection('products', 'products', done);
     watchCollection('orders', 'orders', done);
-  });
+  }));
 
-  await new Promise(resolve => {
+  await withSafety(new Promise(resolve => {
     fbAuth.onAuthStateChanged(user => {
       adminAuthed = !!user;
       resolve();
     });
-  });
+  }));
   fbReady = true;
 }
 function saveCart() { localStorage.setItem('wassel_cart', JSON.stringify(cart)); }
@@ -1556,7 +1564,16 @@ loadAll().then(() => {
     preloader.classList.add('hide');
     setTimeout(() => preloader.remove(), 500);
   }
+}).catch(() => {
+  renderNow();
+  const preloader = document.getElementById('preloader');
+  if (preloader) preloader.remove();
 });
+/* شبكة أمان أخيرة: مهما حصل، لا تبقى شاشة التحميل ظاهرة أكثر من 9 ثوانٍ */
+setTimeout(() => {
+  const preloader = document.getElementById('preloader');
+  if (preloader) { preloader.remove(); if (!document.getElementById('app').innerHTML) renderNow(); }
+}, 9000);
 
 /* =========================================================
    تثبيت المنصة على الهاتف (PWA Install Banner)
