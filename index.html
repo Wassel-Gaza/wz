@@ -1296,9 +1296,36 @@ async function deleteOrder(id, orderNumber) {
   catch (e) { toast('تعذّر حذف الطلب: ' + e.message, true); }
 }
 
+/* قائمة مناطق قطاع غزة الجاهزة للاستيراد الجماعي دفعة واحدة */
+const GAZA_AREAS = [
+  "غزة", "الكرامة", "الرمال", "الزيتون", "الدرج", "السرايا", "الشيخ رضوان",
+  "مشروع عامر", "الشاطئ", "تل الهوا", "الصبرة", "الشيخ عجلين", "الصحابة",
+  "جباليا البلد", "الصفطاوي", "شمال غزة", "الزوايدة", "دير البلح",
+  "النصيرات", "البريج", "المغازي",
+];
+async function importGazaAreas() {
+  const existingNames = new Set(DB.zones.map(z => z.name.trim()));
+  const missing = GAZA_AREAS.filter(name => !existingNames.has(name));
+  if (missing.length === 0) { toast('كل المناطق مضافة مسبقًا.'); return; }
+  if (!confirm(`سيتم إضافة ${missing.length} منطقة جديدة برسوم توصيل افتراضية (15 ₪) يمكنك تعديلها لاحقًا. متابعة؟`)) return;
+  try {
+    const batch = fbDB.batch();
+    for (const name of missing) {
+      batch.set(fbCol('zones').doc(), { name, fee: 15, eta: '1-2 يوم' });
+    }
+    await batch.commit();
+    toast(`تمت إضافة ${missing.length} منطقة بنجاح.`);
+  } catch (e) { toast('تعذّر الاستيراد: ' + e.message, true); }
+}
 function adminZones() {
   return `
-  <div class="admin-topbar"><h1>مناطق التوصيل</h1><button class="btn btn-accent" onclick="openZoneModal()">+ إضافة منطقة</button></div>
+  <div class="admin-topbar">
+    <h1>مناطق التوصيل</h1>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-ghost" onclick="importGazaAreas()">📥 استيراد كل مناطق غزة دفعة واحدة</button>
+      <button class="btn btn-accent" onclick="openZoneModal()">+ إضافة منطقة</button>
+    </div>
+  </div>
   <div class="panel">
     <table>
       <thead><tr><th>المنطقة</th><th>رسوم التوصيل</th><th>الوقت المتوقع</th><th>إجراءات</th></tr></thead>
@@ -1312,7 +1339,7 @@ function adminZones() {
               <button class="icon-action" onclick="openZoneModal('${z.id}')">تعديل</button>
               <button class="icon-action" style="color:var(--red-dark)" onclick="deleteZone('${z.id}')">حذف</button>
             </td>
-          </tr>`).join('')}
+          </tr>`).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--muted)">لا توجد مناطق بعد — استخدم زر "استيراد كل مناطق غزة" فوق</td></tr>`}
       </tbody>
     </table>
   </div>
