@@ -340,9 +340,26 @@ tr:last-child td{border-bottom:none}
 <body>
 <div id="app"></div>
 
+<script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-firestore-compat.js"></script>
+<script>
+/* ---------- إعدادات مشروع Firebase (wassel-platform) ---------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyAjhlJk5mOynhF3RIcpXyOEm1x1V9iAV_E",
+  authDomain: "wassel-platform.firebaseapp.com",
+  projectId: "wassel-platform",
+  storageBucket: "wassel-platform.firebasestorage.app",
+  messagingSenderId: "515399918432",
+  appId: "1:515399918432:web:af3bf00f7388cde4e63405"
+};
+firebase.initializeApp(firebaseConfig);
+const fbAuth = firebase.auth();
+const fbDB = firebase.firestore();
+</script>
 <script>
 /* =========================================================
-   WASSEL | واصل — الواجهة الأمامية (مربوطة بالـ Backend الحقيقي)
+   WASSEL | واصل — الواجهة الأمامية (مربوطة بـ Firebase الحقيقي)
 ========================================================= */
 
 const CURRENCY = "₪";
@@ -354,43 +371,23 @@ let DB = { products: [], categories: [], orders: [], zones: [] };
 let cart = [];
 let route = "#/";
 let productDraftImages = [];
+let fbReady = false; // أول مزامنة كاملة مع Firestore
 
-/* ---------- بيانات أولية (تُستخدم فقط أول مرة قبل إنشاء أي بيانات محلية) ---------- */
-const SEED_CATEGORIES = [
-  { id: 'cat_electronics', name: 'إلكترونيات' },
-  { id: 'cat_accessories', name: 'إكسسوارات' },
-  { id: 'cat_home', name: 'أدوات منزلية' },
-  { id: 'cat_personal', name: 'مستلزمات شخصية' },
-  { id: 'cat_kids', name: 'منتجات أطفال' },
-];
-const SEED_ZONES = [
-  { id: 'zone_gaza', name: 'غزة', fee: 15, eta: '1-2 يوم' },
-  { id: 'zone_north', name: 'شمال غزة', fee: 20, eta: '2-3 أيام' },
-  { id: 'zone_mid', name: 'الوسطى', fee: 18, eta: '1-2 يوم' },
-  { id: 'zone_khan', name: 'خانيونس', fee: 22, eta: '2-3 أيام' },
-  { id: 'zone_rafah', name: 'رفح', fee: 25, eta: '2-3 أيام' },
-];
-const SEED_PRODUCTS = [];
+/* ---------- طبقة Firestore (قاعدة بيانات مركزية حقيقية يشوفها كل الزوار) ---------- */
+function fbCol(name) { return fbDB.collection(name); }
 
-/* ---------- طبقة التخزين المحلي (بديل كامل عن أي سيرفر أو API خارجي) ---------- */
-const LS_KEY = 'wassel_local_db';
-function loadDB() {
-  let saved = null;
-  try { saved = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); } catch (e) { saved = null; }
-  if (saved && saved.products && saved.categories && saved.zones) {
-    DB.products = saved.products; DB.categories = saved.categories;
-    DB.zones = saved.zones; DB.orders = saved.orders || [];
-  } else {
-    DB.products = SEED_PRODUCTS; DB.categories = SEED_CATEGORIES;
-    DB.zones = SEED_ZONES; DB.orders = [];
-    persistDB();
-  }
+let unsubscribers = [];
+function watchCollection(name, targetKey, onUpdate) {
+  const unsub = fbCol(name).onSnapshot(snap => {
+    DB[targetKey] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (onUpdate) onUpdate();
+    if (fbReady) render();
+  }, err => {
+    toast('تعذّر الاتصال بقاعدة البيانات: ' + err.message, true);
+  });
+  unsubscribers.push(unsub);
 }
-function persistDB() {
-  localStorage.setItem(LS_KEY, JSON.stringify({
-    products: DB.products, categories: DB.categories, zones: DB.zones, orders: DB.orders,
-  }));
-}
+
 function deriveCustomers() {
   const map = {};
   for (const o of DB.orders) {
@@ -401,11 +398,26 @@ function deriveCustomers() {
   return Object.values(map);
 }
 
-/* ---------- تحميل البيانات العامة (محليًا بالكامل — بدون أي اتصال خارجي) ---------- */
+/* ---------- تحميل البيانات العامة (مزامنة لحظية حقيقية مع Firestore) ---------- */
 async function loadAll() {
-  loadDB();
   try { cart = JSON.parse(localStorage.getItem('wassel_cart') || '[]'); } catch (e) { cart = []; }
-  adminAuthed = localStorage.getItem('wassel_admin_authed') === '1';
+
+  await new Promise(resolve => {
+    let loaded = 0;
+    const done = () => { loaded++; if (loaded === 4) resolve(); };
+    watchCollection('categories', 'categories', done);
+    watchCollection('zones', 'zones', done);
+    watchCollection('products', 'products', done);
+    watchCollection('orders', 'orders', done);
+  });
+
+  await new Promise(resolve => {
+    fbAuth.onAuthStateChanged(user => {
+      adminAuthed = !!user;
+      resolve();
+    });
+  });
+  fbReady = true;
 }
 function saveCart() { localStorage.setItem('wassel_cart', JSON.stringify(cart)); }
 
@@ -422,7 +434,7 @@ const PLACEHOLDER_IMG = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent
 );
 function productImg(p, idx) { return (p.images && p.images[idx || 0]) || PLACEHOLDER_IMG; }
 function findProduct(id) { return DB.products.find(p => p.id === id); }
-function catName(p) { return p.category?.name || p.categoryName || ''; }
+function catName(p) { return DB.categories.find(c => c.id === p.categoryId)?.name || ''; }
 function cartCount() { return cart.reduce((s, i) => s + i.qty, 0); }
 function cartTotal() { return cart.reduce((s, i) => { const p = findProduct(i.id); if (!p) return s; const price = p.salePrice || p.price; return s + price * i.qty; }, 0); }
 function toast(msg, err) {
@@ -839,7 +851,7 @@ function isValidPsPhone(phone) {
 function genOrderNumber() {
   return 'ORD-' + Math.floor(1000 + Math.random() * 9000) + '-' + Date.now().toString().slice(-4);
 }
-function submitOrder(e) {
+async function submitOrder(e) {
   e.preventDefault();
   const f = new FormData(e.target);
   const zoneId = f.get('zone');
@@ -869,23 +881,34 @@ function submitOrder(e) {
   const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
   const total = subtotal + zone.fee;
   const whatsapp = f.get('wa') || phone;
+  const orderNumber = genOrderNumber();
 
   const order = {
-    id: uid('order_'), orderNumber: genOrderNumber(),
-    customerName: f.get('name'), phone, whatsapp,
-    address, notes: f.get('notes') || '', payment: f.get('payment'), zoneId, zone,
+    orderNumber, customerName: f.get('name'), phone, whatsapp,
+    address, notes: f.get('notes') || '', payment: f.get('payment'), zoneId,
+    zone: { name: zone.name, fee: zone.fee },
     subtotal, deliveryFee: zone.fee, total,
     status: 'جديد', items, statusHistory: [{ status: 'جديد', at: new Date().toISOString() }],
     createdAt: new Date().toISOString(),
   };
 
-  // تخفيض المخزون محليًا
-  for (const item of items) {
-    const p = findProduct(item.productId);
-    if (p) p.stock = Math.max(0, p.stock - item.qty);
+  const submitBtn = e.target.querySelector('button[type=submit]');
+  submitBtn.disabled = true; submitBtn.textContent = 'جاري إرسال الطلب...';
+
+  try {
+    const batch = fbDB.batch();
+    const orderRef = fbCol('orders').doc();
+    batch.set(orderRef, order);
+    for (const item of items) {
+      const p = findProduct(item.productId);
+      if (p) batch.update(fbCol('products').doc(item.productId), { stock: Math.max(0, p.stock - item.qty) });
+    }
+    await batch.commit();
+  } catch (err) {
+    toast('تعذّر إرسال الطلب: ' + err.message, true);
+    submitBtn.disabled = false; submitBtn.textContent = 'تأكيد الطلب';
+    return;
   }
-  DB.orders.unshift(order);
-  persistDB();
 
   cart = []; saveCart();
   const msg = `مرحبًا ${order.customerName} 👋\n\nتم استلام طلبك بنجاح من Wassel | واصل.\n\nرقم الطلب: #${order.orderNumber}\nإجمالي المنتجات: ${money(order.subtotal)}\nرسوم التوصيل: ${money(order.deliveryFee)}\nالإجمالي النهائي: ${money(order.total)}\n\nسنقوم بالتواصل معك لتأكيد الطلب.\nشكرًا لاختيارك واصل.`;
@@ -955,9 +978,11 @@ let adminTab = 'dashboard';
 let adminMenuOpen = false;
 let editingProduct = null, editingZone = null;
 
-/* بيانات دخول لوحة التحكم — ثابتة ومحلية بالكامل (بدون أي سيرفر) */
+/* بيانات دخول لوحة التحكم — تتحقق فعليًا عبر Firebase Authentication الحقيقي.
+   اسم المستخدم "sad123456" يُحوَّل تلقائيًا لبريد داخلي (sad123456@wassel.local)
+   لأن Firebase Auth يعمل عبر البريد الإلكتروني، والمستخدم لا يرى هذا التفصيل. */
 const ADMIN_USERNAME = 'sad123456';
-const ADMIN_PASSWORD = '12345678';
+function usernameToEmail(u) { return u.trim().toLowerCase() + '@wassel.local'; }
 
 function pageAdmin(sub) {
   if (!adminAuthed) {
@@ -966,7 +991,7 @@ function pageAdmin(sub) {
       <div class="logo" style="margin-bottom:18px"><img src="${LOGO_SRC}" class="logo-img" alt="شعار واصل">واصل <span style="color:var(--red)">| Wassel</span> — لوحة التحكم</div>
       <div class="field" style="margin-bottom:12px"><label>اسم المستخدم</label><input id="adminUser" placeholder="أدخل اسم المستخدم"></div>
       <div class="field" style="margin-bottom:12px"><label>كلمة المرور</label><input id="adminPass" type="password" placeholder="أدخل كلمة المرور"></div>
-      <button class="btn btn-black btn-block" onclick="doAdminLogin()">دخول</button>
+      <button class="btn btn-black btn-block" id="loginBtn" onclick="doAdminLogin()">دخول</button>
     </div>`;
   }
   adminTab = sub || 'dashboard';
@@ -1007,20 +1032,24 @@ function closeAdminMenu() {
   const el = document.getElementById('adminDropdown');
   if (el) el.classList.remove('open');
 }
-function doAdminLogin() {
+async function doAdminLogin() {
   const username = document.getElementById('adminUser').value.trim();
   const password = document.getElementById('adminPass').value;
-  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-    localStorage.setItem('wassel_admin_authed', '1');
+  const btn = document.getElementById('loginBtn');
+  if (!username || !password) { toast('يرجى إدخال اسم المستخدم وكلمة المرور.', true); return; }
+  btn.disabled = true; btn.textContent = 'جاري التحقق...';
+  try {
+    await fbAuth.signInWithEmailAndPassword(usernameToEmail(username), password);
     adminAuthed = true;
     go('#/admin/dashboard'); render();
-  } else {
+  } catch (e) {
     toast('اسم المستخدم أو كلمة المرور غير صحيحة.', true);
+    btn.disabled = false; btn.textContent = 'دخول';
   }
 }
 function adminLogout() {
+  fbAuth.signOut();
   adminAuthed = false;
-  localStorage.removeItem('wassel_admin_authed');
   go('#/'); render();
 }
 
@@ -1135,76 +1164,87 @@ function renderImgChips() {
     </div>`).join('');
 }
 function removeDraftImage(i) { productDraftImages.splice(i, 1); document.getElementById('imgChips').innerHTML = renderImgChips(); }
-/* قراءة الصور محليًا من جهاز المستخدم مباشرة (بدون أي رفع لسيرفر) وتحويلها لمعاينة فورية */
-function handleImageSelect(input) {
-  const files = Array.from(input.files || []);
-  if (!files.length) return;
-  let remaining = files.length;
-  files.forEach(file => {
+
+/* ضغط وتصغير الصورة قبل الحفظ (Firestore يرفض أي مستند أكبر من ~1 ميجابايت) */
+function compressImage(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
-      productDraftImages.push(reader.result);
-      document.getElementById('imgChips').innerHTML = renderImgChips();
-      remaining--;
-      if (remaining === 0) toast('تمت إضافة الصور بنجاح.');
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > height && width > maxDim) { height = Math.round(height * maxDim / width); width = maxDim; }
+        else if (height > maxDim) { width = Math.round(width * maxDim / height); height = maxDim; }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
     };
-    reader.onerror = () => { remaining--; toast('تعذّرت قراءة إحدى الصور.', true); };
+    reader.onerror = reject;
     reader.readAsDataURL(file);
   });
-  input.value = '';
 }
-function saveProduct(id) {
+/* قراءة الصور محليًا من جهاز المستخدم، ضغطها، ثم عرضها كمعاينة فورية (بدون أي رفع لسيرفر خارجي) */
+async function handleImageSelect(input) {
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
+  input.value = '';
+  for (const file of files) {
+    try {
+      const compressed = await compressImage(file, 900, 0.65);
+      productDraftImages.push(compressed);
+      document.getElementById('imgChips').innerHTML = renderImgChips();
+    } catch (e) {
+      toast('تعذّرت قراءة إحدى الصور.', true);
+    }
+  }
+  toast('تمت إضافة الصور بنجاح.');
+}
+async function saveProduct(id) {
   const name = document.getElementById('f_name').value.trim();
   const price = parseFloat(document.getElementById('f_price').value) || 0;
   const catNameInput = document.getElementById('f_cat').value.trim();
   if (!name || price <= 0) { toast('يرجى إدخال اسم المنتج والسعر بشكل صحيح.', true); return; }
   if (!catNameInput) { toast('يرجى كتابة اسم التصنيف.', true); return; }
 
-  // ابحث عن تصنيف بنفس الاسم (بدون حساسية لحالة الأحرف)، وإن لم يوجد أنشئه محليًا
+  // ابحث عن تصنيف بنفس الاسم (بدون حساسية لحالة الأحرف)، وإن لم يوجد أنشئه في Firestore
   let category = DB.categories.find(c => c.name.trim().toLowerCase() === catNameInput.toLowerCase());
   let categoryId;
-  if (category) {
-    categoryId = category.id;
-  } else {
-    const newCat = { id: uid('cat_'), name: catNameInput };
-    DB.categories.push(newCat);
-    categoryId = newCat.id;
-  }
-
-  const sale = parseFloat(document.getElementById('f_sale').value) || null;
-  const badges = []; if (document.getElementById('f_new').checked) badges.push('new'); if (document.getElementById('f_best').checked) badges.push('best');
-  const images = productDraftImages.length ? productDraftImages : [];
-  const catObj = DB.categories.find(c => c.id === categoryId);
-
-  if (id) {
-    const p = DB.products.find(p => p.id === id);
-    if (p) {
-      Object.assign(p, {
-        name, sku: document.getElementById('f_sku').value || p.sku,
-        categoryId, category: catObj, price,
-        salePrice: sale && sale < price ? sale : null,
-        stock: parseInt(document.getElementById('f_stock').value) || 0,
-        description: document.getElementById('f_desc').value, images, badges,
-      });
+  try {
+    if (category) {
+      categoryId = category.id;
+    } else {
+      const newCatRef = await fbCol('categories').add({ name: catNameInput });
+      categoryId = newCatRef.id;
     }
-  } else {
-    DB.products.push({
-      id: uid('prod_'),
+
+    const sale = parseFloat(document.getElementById('f_sale').value) || null;
+    const badges = []; if (document.getElementById('f_new').checked) badges.push('new'); if (document.getElementById('f_best').checked) badges.push('best');
+    const images = productDraftImages.length ? productDraftImages : [];
+
+    const data = {
       name, sku: document.getElementById('f_sku').value || ('WSL-' + uid('')),
-      categoryId, category: catObj, price,
+      categoryId, price,
       salePrice: sale && sale < price ? sale : null,
       stock: parseInt(document.getElementById('f_stock').value) || 0,
       description: document.getElementById('f_desc').value, images, badges,
-    });
+    };
+
+    if (id) await fbCol('products').doc(id).update(data);
+    else await fbCol('products').add(data);
+  } catch (e) {
+    toast('تعذّر حفظ المنتج: ' + e.message, true);
+    return;
   }
-  persistDB();
-  closeModal(); render(); toast('تم حفظ المنتج بنجاح.');
+  closeModal(); toast('تم حفظ المنتج بنجاح.');
 }
-function deleteProduct(id) {
+async function deleteProduct(id) {
   if (!confirm('هل تريد حذف هذا المنتج؟')) return;
-  DB.products = DB.products.filter(p => p.id !== id);
-  persistDB();
-  render(); toast('تم حذف المنتج.');
+  try { await fbCol('products').doc(id).delete(); toast('تم حذف المنتج.'); }
+  catch (e) { toast('تعذّر حذف المنتج: ' + e.message, true); }
 }
 function closeModal() { document.getElementById('modalRoot').innerHTML = ''; }
 
@@ -1240,22 +1280,20 @@ function waStatusMsg(o) {
   if (o.status === 'تم التأكيد') return `تم تأكيد طلبك بنجاح ✅\nرقم الطلب: #${o.orderNumber}`;
   return `مرحبًا بخصوص طلبك رقم #${o.orderNumber} — الحالة الحالية: ${o.status}`;
 }
-function updateOrderStatus(id, status) {
+async function updateOrderStatus(id, status) {
   const order = DB.orders.find(o => o.id === id);
   if (!order) return;
-  order.status = status;
-  order.statusHistory = order.statusHistory || [];
-  order.statusHistory.push({ status, at: new Date().toISOString() });
-  persistDB();
-  toast('تم تحديث حالة الطلب. يمكنك إرسال إشعار للعميل يدويًا عبر واتساب من عمود "واتساب".');
-  render();
+  const statusHistory = order.statusHistory || [];
+  statusHistory.push({ status, at: new Date().toISOString() });
+  try {
+    await fbCol('orders').doc(id).update({ status, statusHistory });
+    toast('تم تحديث حالة الطلب. يمكنك إرسال إشعار للعميل يدويًا عبر واتساب من عمود "واتساب".');
+  } catch (e) { toast('تعذّر تحديث حالة الطلب: ' + e.message, true); }
 }
-function deleteOrder(id, orderNumber) {
+async function deleteOrder(id, orderNumber) {
   if (!confirm(`هل تريد حذف الطلب رقم #${orderNumber} نهائيًا؟ لا يمكن التراجع عن هذا الإجراء.`)) return;
-  DB.orders = DB.orders.filter(o => o.id !== id);
-  persistDB();
-  toast('تم حذف الطلب.');
-  render();
+  try { await fbCol('orders').doc(id).delete(); toast('تم حذف الطلب.'); }
+  catch (e) { toast('تعذّر حذف الطلب: ' + e.message, true); }
 }
 
 function adminZones() {
@@ -1298,25 +1336,21 @@ function openZoneModal(id) {
     </div>
   </div>`;
 }
-function saveZone(id) {
+async function saveZone(id) {
   const name = document.getElementById('z_name').value.trim();
   if (!name) { toast('يرجى إدخال اسم المنطقة.', true); return; }
   const fee = parseFloat(document.getElementById('z_fee').value) || 0;
   const eta = document.getElementById('z_eta').value;
-  if (id) {
-    const z = DB.zones.find(z => z.id === id);
-    if (z) { z.name = name; z.fee = fee; z.eta = eta; }
-  } else {
-    DB.zones.push({ id: uid('zone_'), name, fee, eta });
-  }
-  persistDB();
-  closeModal(); render(); toast('تم حفظ المنطقة.');
+  try {
+    if (id) await fbCol('zones').doc(id).update({ name, fee, eta });
+    else await fbCol('zones').add({ name, fee, eta });
+  } catch (e) { toast('تعذّر حفظ المنطقة: ' + e.message, true); return; }
+  closeModal(); toast('تم حفظ المنطقة.');
 }
-function deleteZone(id) {
+async function deleteZone(id) {
   if (!confirm('هل تريد حذف هذه المنطقة؟')) return;
-  DB.zones = DB.zones.filter(z => z.id !== id);
-  persistDB();
-  render(); toast('تم حذف المنطقة.');
+  try { await fbCol('zones').doc(id).delete(); toast('تم حذف المنطقة.'); }
+  catch (e) { toast('تعذّر حذف المنطقة: ' + e.message, true); }
 }
 
 function adminCustomers() {
