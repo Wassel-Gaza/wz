@@ -733,14 +733,22 @@ function quickAdd(id) { addToCart(id, () => 1); }
 function buyNow(id) { addToCart(id, () => 1); go('#/cart'); }
 function buyNowQty(id) { addToCart(id, () => pdQty); go('#/cart'); }
 
+/* تنظيف تلقائي: إزالة أي منتج من السلة لم يعد موجودًا فعليًا في قاعدة البيانات */
+function cleanCart() {
+  const before = cart.length;
+  cart = cart.filter(i => !!findProduct(i.id));
+  if (cart.length !== before) { saveCart(); return true; }
+  return false;
+}
 function pageCart() {
+  const removed = cleanCart();
   if (cart.length === 0) {
     return `${header()}
     <div class="container">
       <div class="empty">
         <div class="ic">🛒</div>
         <h3>سلتك فارغة حاليًا</h3>
-        <p>اكتشف منتجاتنا وابدأ التسوق.</p>
+        <p>${removed ? 'تمت إزالة منتج لم يعد متوفرًا من سلتك. ' : ''}اكتشف منتجاتنا وابدأ التسوق.</p>
         <a href="#/shop" class="btn btn-black">تصفح المنتجات</a>
       </div>
     </div>
@@ -797,6 +805,7 @@ function removeFromCart(id) {
 }
 
 function pageCheckout() {
+  cleanCart();
   if (cart.length === 0) { go('#/cart'); return ''; }
   const subtotal = cartTotal();
   return `
